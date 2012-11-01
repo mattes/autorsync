@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 // autorsync
+// https://github.com/mattes/autorsync
 //
 // Watch directories for changes and update remote directories with rsync. 
 // Directories are monitored with fs.watch from Node.js.
