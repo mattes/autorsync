@@ -1,0 +1,264 @@
+#!/usr/bin/env node
+
+// autorsync
+//
+// Watch directories for changes and update remote directories with rsync. 
+// Directories are monitored with fs.watch from Node.js.
+//
+// ./autorsync for usage
+// 
+// Copyright 2012 Matthias Kadenbach  
+// Released under the MIT license
+
+var fs = require('fs');
+var cp = require('child_process');
+
+var VERSION = "1.0.0";
+
+
+// Default Config
+var watchPath; // NO trailing slash
+var syncLocalPath; //  usually =watchPath
+var syncExcludeFile = ""; // relative to syncLocalPath or absolute path
+var syncRemotePath;
+var syncVerbose = false; // puts some more details about the rsync process to console
+var syncSimulate = false; // simulate (dry-run)
+var sshPort = 22; // default ssh port
+var sshUser;
+var sshHost;
+var startSyncToolDelay = 500; // wait ms before start of sync tool (e.g. rsync)
+
+// Read Config from Command Line
+var cmds = ["source", "userhostport", "destination"];
+process.argv.forEach(function(param, index){
+  if(index <= 1) return; // skip first two entries in array
+
+  if(param.indexOf("--") === 0) {
+    // option ...
+    var _value = param.slice(2).split("=");
+    var key = _value.shift();
+    var value = _value.join("");    
+    switch(key) {
+      case "exclude":
+        syncExcludeFile = value;
+        break;
+      case "sync-delay":
+        startSyncToolDelay = value;
+        break;
+      case "sync-verbose":
+        syncVerbose = value == "true" ? true : false;
+        break;
+      case "sync-simulate":
+        syncSimulate = value == "true" ? true : false;
+        break;
+    }
+  } else if(cmds.length > 0) {
+    // cmd ...
+    var value = param;
+    switch(cmds.shift()) {
+      case "source":
+        syncLocalPath = stripTrailingSlash(value);
+        watchPath = syncLocalPath;          
+        break;
+      case "userhostport":
+        try {
+          var _tmp = value.split("@");
+          sshUser = _tmp[0];
+          var _tmp = _tmp[1].split(":");
+          sshHost = _tmp[0];
+          if(_tmp[1]) sshPort = _tmp[1];
+        } catch(e) {
+          var _portString = sshPort ? ":" + sshPort : "[:port]";
+          console.log(usage("Invalid user@host[:port] (" + sshUser + "@" + sshHost + _portString + ")"));
+          return;
+        }
+        break;
+      case "destination":
+        syncRemotePath = value;
+        break;
+    }
+  } else {
+    // wrong parameter
+  }    
+});
+
+// is syncLocalPath present?
+if(!syncLocalPath) {
+  console.log(usage("Invalid source " + syncLocalPath));
+  return;
+}
+
+// is ssh data present?
+if(!sshUser || !sshHost || !sshPort) {
+  var _portString = sshPort ? ":" + sshPort : "[:port]";
+  console.log(usage("Invalid user@host[:port] (" + sshUser + "@" + sshHost + _portString + ")"));
+  return;
+}
+
+// is syncRemotePath present?
+if(!syncRemotePath) {
+  console.log(usage("Invalid destination " + syncRemotePath));
+  return;
+}
+
+
+// syncExcludeFile relative or absolute?
+if(syncExcludeFile.indexOf("/") !== 0) {
+  // is relative path, add syncLocalPath
+  syncExcludeFile = syncLocalPath + "/" + syncExcludeFile;
+}
+
+// verify syncExcludeFile exists if present
+if(syncExcludeFile){
+  if(!fs.existsSync(syncExcludeFile)) {
+    console.log(usage("Unable to open exclude file " + syncExcludeFile));
+    return false;
+  }    
+}
+
+var watches = [];
+var restartDirectoryReadTimeout = null;
+var startSyncToolTimeout = null;
+var readingDirectoriesFlag = false;
+var syncingFlag = false;
+var syncCount = 0;
+
+sync(); // initial sync
+init(); // start watching directories and sync on updates
+
+// init watches
+function init() {
+  if(watches && watches.length > 0) {
+    watches.forEach(function(fs){
+      fs.close();
+    });    
+  }
+  watches = [];
+  readdir(watchPath);  
+}
+
+// generate directory list
+function readdir(path) {
+  if(readingDirectoriesFlag) return false;
+  readingDirectoriesFlag = true;
+
+  // @todo list hidden directories as well?
+  cp.exec("find " + path + " -type d", function(err, stdout, stderr) {
+    if(err) {
+      console.log("FATAL: Unable to build directory tree. Is command find available on your OS?");
+      return;
+    }
+
+    var files = stdout.split('\n');
+    if(files && files.length > 0) {
+      files.forEach(function(file){
+        if(file) startWatching(file);
+      });
+    }
+
+    readingDirectoriesFlag = false;
+  });
+}
+
+// bind watch to directory
+function startWatching(dir) {
+  try {
+    // console.log("Watching: " + dir);
+    watches.push(fs.watch(dir, function (event, filename) {
+      // something changed event ...
+      // @bug filename doesnt work?!
+
+      if(startSyncToolTimeout) clearTimeout(startSyncToolTimeout);
+      startSyncToolTimeout = setTimeout(function(){
+        sync();
+      }, startSyncToolDelay);
+      
+      // restarting directory read
+      if(restartDirectoryReadTimeout) clearTimeout(restartDirectoryReadTimeout);
+      restartDirectoryReadTimeout = setTimeout(function(){
+        init(); // this is bad! but how could we get partial updates on directories? @todo
+                // find . -newer date_marker_file might be an option, but it doesnt look bulletproof
+      }, 1000);
+
+    }));    
+  } catch(e) {
+    console.log("Unable to watch directory: " + dir);
+  }
+}
+
+// start sync process
+function sync() {
+  if(syncingFlag) return false;
+  syncingFlag = true;
+  syncCount++;
+  var date = new Date();
+
+  console.log("Sync #" + syncCount + " " + addLeadingZero(date.getHours()) + ":" + addLeadingZero(date.getMinutes()) + ":" + addLeadingZero(date.getSeconds()));
+
+  var command = [
+    "/usr/local/bin/rsync",
+    "--recursive",
+    "--delete-during",
+    "--force",
+    "--progress",
+    "--rsh='ssh -p " + sshPort + "'",
+    syncLocalPath + "/",
+    sshUser + "@" + sshHost + ":" + syncRemotePath 
+  ];
+
+  // verify exclude file again ... is it still there?
+  if(syncExcludeFile){
+    if(fs.existsSync(syncExcludeFile)) {
+      command.splice(-2, 0, "--exclude-from " + syncExcludeFile);  
+    } else {
+      console.log("Unable to open exclude file " + syncExcludeFile);
+      syncingFlag = false;
+      return false;
+    }    
+  }
+
+  // simulate sync?
+  if(syncSimulate) command.splice(-2, 0, "--dry-run");
+
+  var ls = cp.exec(command.join(" "), function(error, stdout, stderr){
+    if(error || stderr) console.log(stderr); 
+    if(syncVerbose || syncSimulate) {
+      console.log("-------------");
+      console.log(stdout);
+    }
+
+    syncingFlag = false;
+  });
+}
+
+// -----------------
+// helper methods
+
+function usage(errorString) {
+  var str = "";
+
+  str += "autorsync  version " + VERSION + "\n";
+  str += "Copyright (C) 2012 by Matthias Kadenbach\n\n";    
+
+  str += "!!! " + errorString + "\n\n";
+
+  str += "Usage:\n autorsync [option]... source user@host[:port] destination\n\n";
+  str += "Options:\n";
+  str += " --exclude=filepath    path to \"exclude from sync file\" relative to source\n";
+  str += " --sync-delay=n        wait for sync to happen\n";
+  str += " --sync-verbose=bool   print more details about sync\n";
+  str += " --sync-simulate=bool  simulate sync and print details about sync";
+
+  return str;
+}
+
+function stripTrailingSlash(str) {
+    if(str.substr(-1) == '/') {
+        return str.substr(0, str.length - 1);
+    }
+    return str;
+}
+
+function addLeadingZero(value) {
+  return value < 10 ? "0" + value : value;
+}
