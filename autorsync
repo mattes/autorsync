@@ -29,6 +29,13 @@ var sshUser;
 var sshHost;
 var startSyncToolDelay = 500; // wait ms before start of sync tool (e.g. rsync)
 
+
+if(process.argv.length <= 2) {
+  // show usage when no params
+  console.log(usage());
+  return;
+}
+
 // Read Config from Command Line
 var cmds = ["source", "userhostport", "destination"];
 process.argv.forEach(function(param, index){
@@ -238,10 +245,13 @@ function sync() {
 function usage(errorString) {
   var str = "";
 
-  str += "autorsync  version " + VERSION + "\n";
-  str += "Copyright (C) 2012 by Matthias Kadenbach\n\n";    
-
-  str += "!!! " + errorString + "\n\n";
+  if(errorString) {
+    str += "!!! " + errorString + "\n\n";
+  }
+  else {
+    str += "autorsync  version " + VERSION + "\n";
+    str += "Copyright (C) 2012 by Matthias Kadenbach\n\n";        
+  }
 
   str += "Usage:\n autorsync [option]... source user@host[:port] destination\n\n";
   str += "Options:\n";
