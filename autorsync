@@ -14,7 +14,7 @@
 var fs = require('fs');
 var cp = require('child_process');
 
-var VERSION = "1.0.0";
+var VERSION = "1.0.1";
 
 
 // Default Config
@@ -137,8 +137,8 @@ init(); // start watching directories and sync on updates
 // init watches
 function init() {
   if(watches && watches.length > 0) {
-    watches.forEach(function(fs){
-      fs.close();
+    watches.forEach(function(dir){
+      fs.unwatchFile(dir);
     });    
   }
   watches = [];
@@ -151,7 +151,10 @@ function readdir(path) {
   readingDirectoriesFlag = true;
 
   // @todo list hidden directories as well?
-  cp.exec("find " + path + " -type d", function(err, stdout, stderr) {
+  // cp.exec("find " + path + " -type d", function(err, stdout, stderr) { 
+  // -type d lists directories only, but we want to monitor file changes as well
+
+  cp.exec("find " + path + "", function(err, stdout, stderr) {
     if(err) {
       console.log("FATAL: Unable to build directory tree. Is command find available on your OS?");
       return;
@@ -172,9 +175,9 @@ function readdir(path) {
 function startWatching(dir) {
   try {
     // console.log("Watching: " + dir);
-    watches.push(fs.watch(dir, function (event, filename) {
+    watches.push(dir);
+    fs.watchFile(dir, function (event, filename) {
       // something changed event ...
-      // @bug filename doesnt work?!
 
       if(startSyncToolTimeout) clearTimeout(startSyncToolTimeout);
       startSyncToolTimeout = setTimeout(function(){
@@ -188,14 +191,15 @@ function startWatching(dir) {
                 // find . -newer date_marker_file might be an option, but it doesnt look bulletproof
       }, 1000);
 
-    }));    
+    });    
   } catch(e) {
-    console.log("Unable to watch directory: " + dir);
+    console.error("Unable to watch: " + dir);
   }
 }
 
 // start sync process
 function sync() {
+
   if(syncingFlag) return false;
   syncingFlag = true;
   syncCount++;
@@ -228,8 +232,12 @@ function sync() {
   // simulate sync?
   if(syncSimulate) command.splice(-2, 0, "--dry-run");
 
-  var ls = cp.exec(command.join(" "), function(error, stdout, stderr){
-    if(error || stderr) console.log(stderr); 
+  var ls = cp.exec(command.join(" "), function(error, stdout, stderr) {
+    if(error || stderr) {
+      console.log(stderr); 
+    } else {
+      console.log(" - done");
+    }
     if(syncVerbose || syncSimulate) {
       console.log("-------------");
       console.log(stdout);
