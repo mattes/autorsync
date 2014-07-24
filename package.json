@@ -1,0 +1,28 @@
+{
+  "name": "autorsync",
+  "version": "1.0.1",
+  "description": "Node.js File Watch + rsync",
+  "bin" : { 
+    "autorsync" : "./bin/autorsync.js" 
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mattes/autorsync.git"
+  },
+  "keywords": [
+    "rsync"
+  ],
+  "author": { 
+    "name" : "Matthias Kadenbach", 
+    "email" : "matthias.kadenbach@gmail.com",
+    "url" : "http://matthiaskadenbach.de/"
+  },
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/mattes/autorsync/issues"
+  },
+  "homepage": "https://github.com/mattes/autorsync"
+}
